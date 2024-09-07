@@ -1,3 +1,55 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+/******************************************************************************
+Copyright (c) 2017-2022 Frank Pagliughi <fpagliughi@mindspring.com>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of Eclipse Distribution License v1.0
+which accompany this distribution.
+
+The Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php
+
+Contributors:
+   Frank Pagliughi - initial implementation and documentation
+
+******************************************************************************/
+
+/******************************************************************************
+Copyright (c) 2024 Pluraf Embedded AB <code@pluraf.com>
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software without
+specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS”
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS
+BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+===============================================================================
+
+Contributors:
+   Konstantin Tyurin <konstantin@pluraf.com>
+
+******************************************************************************/
+
 /////////////////////////////////////////////////////////////////////////////
 /// @file thread_queue.h
 /// Implementation of the template class 'thread_queue', a thread-safe,
@@ -6,21 +58,6 @@
 /// @date 09-Jan-2017
 /////////////////////////////////////////////////////////////////////////////
 
-/*******************************************************************************
- * Copyright (c) 2017-2022 Frank Pagliughi <fpagliughi@mindspring.com>
- *
- * All rights reserved. This program and the accompanying materials
- * are made available under the terms of the Eclipse Public License v2.0
- * and Eclipse Distribution License v1.0 which accompany this distribution.
- *
- * The Eclipse Public License is available at
- *    http://www.eclipse.org/legal/epl-v20.html
- * and the Eclipse Distribution License is available at
- *   http://www.eclipse.org/org/documents/edl-v10.php.
- *
- * Contributors:
- *    Frank Pagliughi - initial implementation and documentation
- *******************************************************************************/
 
 #ifndef __mqtt_thread_queue_h
 #define __mqtt_thread_queue_h
@@ -32,6 +69,7 @@
 #include <deque>
 #include <queue>
 #include <algorithm>
+#include <stdexcept>
 
 namespace mqtt {
 
@@ -83,7 +121,7 @@ private:
 	/** Object lock */
 	mutable std::mutex lock_;
 	/** Condition get signaled when item added to empty queue */
-	std::condition_variable notEmptyCond_;
+	std::condition_variable notEmptyOrExitCond_;
 	/** Condition gets signaled then item removed from full queue */
 	std::condition_variable notFullCond_;
 	/** The capacity of the queue */
@@ -95,6 +133,8 @@ private:
 	using guard = std::lock_guard<std::mutex>;
 	/** General purpose guard */
 	using unique_guard = std::unique_lock<std::mutex>;
+
+	bool exit_ {false};
 
 public:
 	/**
@@ -154,7 +194,7 @@ public:
 
 		que_.emplace(std::move(val));
 		g.unlock();
-		notEmptyCond_.notify_one();
+		notEmptyOrExitCond_.notify_one();
 	}
 	/**
 	 * Non-blocking attempt to place an item into the queue.
@@ -169,7 +209,7 @@ public:
 
 		que_.emplace(std::move(val));
 		g.unlock();
-		notEmptyCond_.notify_one();
+		notEmptyOrExitCond_.notify_one();
 		return true;
 	}
 	/**
@@ -189,7 +229,7 @@ public:
 
 		que_.emplace(std::move(val));
 		g.unlock();
-		notEmptyCond_.notify_one();
+		notEmptyOrExitCond_.notify_one();
 		return true;
 	}
 	/**
@@ -210,7 +250,7 @@ public:
 
 		que_.emplace(std::move(val));
 		g.unlock();
-		notEmptyCond_.notify_one();
+		notEmptyOrExitCond_.notify_one();
 		return true;
 	}
 	/**
@@ -219,12 +259,13 @@ public:
 	 * added to the queue by another thread,
 	 * @param val Pointer to a variable to receive the value.
 	 */
-	void get(value_type* val) {
-		if (!val)
-			return;
+	void get(value_type * val) {
+		if(!val) return;
 
 		unique_guard g(lock_);
-		notEmptyCond_.wait(g, [this]{return !que_.empty();});
+		notEmptyOrExitCond_.wait(g, [this]{return !que_.empty() || exit_;});
+
+		if(exit_) throw std::underflow_error("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -239,7 +280,9 @@ public:
 	 */
 	value_type get() {
 		unique_guard g(lock_);
-		notEmptyCond_.wait(g, [this]{return !que_.empty();});
+		notEmptyOrExitCond_.wait(g, [this]{return !que_.empty() || exit_;});
+
+		if(exit_) throw std::underflow_error("No messages and exit received");
 
 		value_type val = std::move(que_.front());
 		que_.pop();
@@ -256,12 +299,10 @@ public:
 	 *  	   the queue is empty.
 	 */
 	bool try_get(value_type* val) {
-		if (!val)
-			return false;
+		if(!val) return false;
 
 		unique_guard g(lock_);
-		if (que_.empty())
-			return false;
+		if(que_.empty()) return false;
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -281,12 +322,14 @@ public:
 	 */
 	template <typename Rep, class Period>
 	bool try_get_for(value_type* val, const std::chrono::duration<Rep, Period>& relTime) {
-		if (!val)
-			return false;
+		if(!val) return false;
 
 		unique_guard g(lock_);
-		if (!notEmptyCond_.wait_for(g, relTime, [this]{return !que_.empty();}))
+		if(!notEmptyOrExitCond_.wait_for(g, relTime, [this]{return !que_.empty() || exit_;})){
 			return false;
+		}
+
+		if(exit_) throw std::underflow_error("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -306,18 +349,25 @@ public:
 	 */
 	template <class Clock, class Duration>
 	bool try_get_until(value_type* val, const std::chrono::time_point<Clock,Duration>& absTime) {
-		if (!val)
-			return false;
+		if(!val) return false;
 
 		unique_guard g(lock_);
-		if (!notEmptyCond_.wait_until(g, absTime, [this]{return !que_.empty();}))
+		if(!notEmptyOrExitCond_.wait_until(g, absTime, [this]{return !que_.empty() || exit_;})){
 			return false;
+		}
+
+		if(exit_) throw std::underflow_error("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
 		g.unlock();
 		notFullCond_.notify_one();
 		return true;
+	}
+
+	void handle_exit() {
+		exit_ = true;
+		notEmptyOrExitCond_.notify_all();
 	}
 };
 
@@ -326,4 +376,3 @@ public:
 }
 
 #endif		// __mqtt_thread_queue_h
-

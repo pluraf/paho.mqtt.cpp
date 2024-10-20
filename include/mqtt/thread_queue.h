@@ -134,7 +134,7 @@ private:
 	/** General purpose guard */
 	using unique_guard = std::unique_lock<std::mutex>;
 
-	bool exit_ {false};
+	bool is_active_ {true};
 
 public:
 	/**
@@ -263,9 +263,9 @@ public:
 		if(!val) return;
 
 		unique_guard g(lock_);
-		notEmptyOrExitCond_.wait(g, [this]{return !que_.empty() || exit_;});
+		notEmptyOrExitCond_.wait(g, [this]{return ! que_.empty() || ! is_active_;});
 
-		if(exit_) throw std::underflow_error("No messages and exit received");
+		if(! is_active_) throw std::out_of_range("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -280,9 +280,9 @@ public:
 	 */
 	value_type get() {
 		unique_guard g(lock_);
-		notEmptyOrExitCond_.wait(g, [this]{return !que_.empty() || exit_;});
+		notEmptyOrExitCond_.wait(g, [this]{return ! que_.empty() || ! is_active_;});
 
-		if(exit_) throw std::underflow_error("No messages and exit received");
+		if(! is_active_) throw std::out_of_range("No messages and exit received");
 
 		value_type val = std::move(que_.front());
 		que_.pop();
@@ -325,11 +325,11 @@ public:
 		if(!val) return false;
 
 		unique_guard g(lock_);
-		if(!notEmptyOrExitCond_.wait_for(g, relTime, [this]{return !que_.empty() || exit_;})){
+		if(!notEmptyOrExitCond_.wait_for(g, relTime, [this]{return !que_.empty() || ! is_active_;})){
 			return false;
 		}
 
-		if(exit_) throw std::underflow_error("No messages and exit received");
+		if(! is_active_) throw std::out_of_range("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -352,11 +352,11 @@ public:
 		if(!val) return false;
 
 		unique_guard g(lock_);
-		if(!notEmptyOrExitCond_.wait_until(g, absTime, [this]{return !que_.empty() || exit_;})){
+		if(!notEmptyOrExitCond_.wait_until(g, absTime, [this]{return !que_.empty() || ! is_active_;})){
 			return false;
 		}
 
-		if(exit_) throw std::underflow_error("No messages and exit received");
+		if(! is_active_) throw std::out_of_range("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -365,8 +365,8 @@ public:
 		return true;
 	}
 
-	void handle_exit() {
-		exit_ = true;
+	void exit_blocking_calls(){
+		is_active_ = false;
 		notEmptyOrExitCond_.notify_all();
 	}
 };

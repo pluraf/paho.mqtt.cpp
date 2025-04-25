@@ -265,7 +265,7 @@ public:
 		unique_guard g(lock_);
 		notEmptyOrExitCond_.wait(g, [this]{return ! que_.empty() || ! is_active_;});
 
-		if(! is_active_) throw std::out_of_range("No messages and exit received");
+		if(! is_active_) throw std::underflow_error("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -282,7 +282,7 @@ public:
 		unique_guard g(lock_);
 		notEmptyOrExitCond_.wait(g, [this]{return ! que_.empty() || ! is_active_;});
 
-		if(! is_active_) throw std::out_of_range("No messages and exit received");
+		if(! is_active_) throw std::underflow_error("No messages and exit received");
 
 		value_type val = std::move(que_.front());
 		que_.pop();
@@ -329,7 +329,7 @@ public:
 			return false;
 		}
 
-		if(! is_active_) throw std::out_of_range("No messages and exit received");
+		if(! is_active_) throw std::underflow_error("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
@@ -356,7 +356,7 @@ public:
 			return false;
 		}
 
-		if(! is_active_) throw std::out_of_range("No messages and exit received");
+		if(! is_active_) throw std::underflow_error("No messages and exit received");
 
 		*val = std::move(que_.front());
 		que_.pop();
